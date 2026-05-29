@@ -1,0 +1,587 @@
+---
+title: "Evolution of Spotify Audio Features and Track Popularity, 1980-2020"
+author: "Aleks Mantashyan, Roman Ghukasyan"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: false
+    df_print: paged
+  word_document:
+    toc: false
+  pdf_document:
+    latex_engine: xelatex
+    toc: false
+    number_sections: true
+fontsize: 10pt
+geometry: margin=0.65in
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  fig.width = 3.45,
+  fig.height = 2.45,
+  dpi = 300,
+  out.width = "100%"
+)
+
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(knitr)
+
+set.seed(116)
+
+# Helper functions for clean reporting
+fmt_num <- function(x, digits = 3) {
+  formatC(x, format = "f", digits = digits)
+}
+
+fmt_p <- function(p) {
+  ifelse(is.na(p), "p = NA", ifelse(p < 0.001, "p < 0.001", paste0("p = ", fmt_num(p, 3))))
+}
+
+sig_text <- function(p) {
+  ifelse(p < 0.05, "statistically significant", "not statistically significant")
+}
+
+feature_names <- c(
+  danceability = "Danceability",
+  energy = "Energy",
+  loudness = "Loudness"
+)
+
+feature_sentence <- function(tbl, feature_label) {
+  row <- tbl %>% filter(feature == feature_label)
+  direction <- ifelse(row$difference > 0, "higher", "lower")
+  paste0(
+    feature_label, " is ", fmt_num(abs(row$difference), 3), " units ", direction,
+    " in 2000-2020 than in 1980-1999 (", fmt_p(row$p_value), ")."
+  )
+}
+
+theme_paper <- function(base_size = 8) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(face = "bold"),
+      plot.subtitle = element_text(size = base_size - 1),
+      legend.position = "bottom",
+      legend.title = element_text(size = base_size - 1),
+      legend.text = element_text(size = base_size - 1),
+      strip.text = element_text(face = "bold"),
+      axis.title = element_text(size = base_size),
+      axis.text = element_text(size = base_size - 1)
+    )
+}
+
+
+# Data loading uses relative paths. Keep this Rmd in the same folder as tracks.csv,
+# or place tracks.csv inside a Data/ or data/ folder.
+data_candidates <- c("tracks.csv", "Data/tracks.csv", "data/tracks.csv")
+data_path <- data_candidates[file.exists(data_candidates)][1]
+
+if (is.na(data_path)) {
+  stop("tracks.csv was not found. Put tracks.csv in the same folder as this Rmd, or inside Data/ or data/.")
+}
+
+tracks_raw <- read_csv(data_path, show_col_types = FALSE)
+
+required_cols <- c(
+  "release_date", "popularity", "danceability", "energy",
+  "loudness", "acousticness", "valence", "tempo"
+)
+missing_cols <- setdiff(required_cols, names(tracks_raw))
+
+if (length(missing_cols) > 0) {
+  stop(paste("The dataset is missing these required columns:", paste(missing_cols, collapse = ", ")))
+}
+
+spotify_clean <- tracks_raw %>%
+  mutate(
+    release_date_chr = as.character(release_date),
+    release_year = as.integer(str_extract(release_date_chr, "^\\d{4}")),
+    decade_start = floor(release_year / 10) * 10,
+    decade = case_when(
+      decade_start == 1980 ~ "1980s",
+      decade_start == 1990 ~ "1990s",
+      decade_start == 2000 ~ "2000s",
+      decade_start == 2010 ~ "2010s",
+      decade_start == 2020 ~ "2020",
+      TRUE ~ NA_character_
+    ),
+    decade = factor(decade, levels = c("1980s", "1990s", "2000s", "2010s", "2020")),
+    period = case_when(
+      release_year >= 1980 & release_year <= 1999 ~ "1980-1999",
+      release_year >= 2000 & release_year <= 2020 ~ "2000-2020",
+      TRUE ~ NA_character_
+    ),
+    period = factor(period, levels = c("1980-1999", "2000-2020"))
+  ) %>%
+  filter(release_year >= 1980, release_year <= 2020) %>%
+  select(any_of(c(
+    "id", "name", "artists", "release_date", "release_year", "decade", "period",
+    "popularity", "danceability", "energy", "loudness", "acousticness", "valence",
+    "tempo", "duration_ms", "explicit"
+  ))) %>%
+  drop_na(release_year, decade, period, popularity, danceability, energy, loudness, acousticness, valence, tempo)
+
+# Remove duplicate tracks by id when id exists. Otherwise remove exact duplicate rows.
+if ("id" %in% names(spotify_clean)) {
+  spotify_clean <- spotify_clean %>% distinct(id, .keep_all = TRUE)
+} else {
+  spotify_clean <- spotify_clean %>% distinct()
+}
+
+n_tracks <- nrow(spotify_clean)
+first_year <- min(spotify_clean$release_year)
+last_year <- max(spotify_clean$release_year)
+
+summary_table <- spotify_clean %>%
+  summarise(
+    Tracks = n(),
+    `First year` = min(release_year),
+    `Last year` = max(release_year),
+    `Mean popularity` = mean(popularity),
+    `Median popularity` = median(popularity),
+    `Mean energy` = mean(energy),
+    `Mean danceability` = mean(danceability),
+    `Mean loudness` = mean(loudness)
+  )
+
+
+# Compact table used in the paper instead of repeating the same summary statistics in prose.
+dataset_summary_table <- tibble(
+  Metric = c(
+    "Number of tracks",
+    "Release year range",
+    "Mean track popularity",
+    "Median track popularity",
+    "Mean energy",
+    "Mean danceability",
+    "Mean loudness (dB)"
+  ),
+  Value = c(
+    comma(n_tracks),
+    paste0(first_year, "-", last_year),
+    fmt_num(mean(spotify_clean$popularity), 3),
+    fmt_num(median(spotify_clean$popularity), 0),
+    fmt_num(mean(spotify_clean$energy), 3),
+    fmt_num(mean(spotify_clean$danceability), 3),
+    fmt_num(mean(spotify_clean$loudness), 3)
+  )
+)
+
+track_counts_year <- spotify_clean %>%
+  count(release_year, name = "tracks")
+
+year_feature_summary <- spotify_clean %>%
+  group_by(release_year) %>%
+  summarise(
+    tracks = n(),
+    danceability = mean(danceability),
+    energy = mean(energy),
+    loudness = mean(loudness),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = c(danceability, energy, loudness),
+    names_to = "feature",
+    values_to = "mean_value"
+  ) %>%
+  mutate(
+    feature = recode(feature, !!!feature_names),
+    feature = factor(feature, levels = c("Danceability", "Energy", "Loudness"))
+  )
+
+decade_feature_summary <- spotify_clean %>%
+  select(decade, danceability, energy, loudness) %>%
+  pivot_longer(
+    cols = c(danceability, energy, loudness),
+    names_to = "feature",
+    values_to = "value"
+  ) %>%
+  mutate(
+    feature = recode(feature, !!!feature_names),
+    feature = factor(feature, levels = c("Danceability", "Energy", "Loudness"))
+  ) %>%
+  group_by(decade, feature) %>%
+  summarise(
+    n = n(),
+    mean_value = mean(value),
+    se = sd(value) / sqrt(n()),
+    lower = mean_value - 1.96 * se,
+    upper = mean_value + 1.96 * se,
+    .groups = "drop"
+  )
+
+period_feature_long <- spotify_clean %>%
+  select(period, danceability, energy, loudness) %>%
+  pivot_longer(
+    cols = c(danceability, energy, loudness),
+    names_to = "feature",
+    values_to = "value"
+  ) %>%
+  mutate(
+    feature = recode(feature, !!!feature_names),
+    feature = factor(feature, levels = c("Danceability", "Energy", "Loudness"))
+  )
+
+period_tests <- map_dfr(names(feature_names), function(feature_var) {
+  modern_values <- spotify_clean %>% filter(period == "2000-2020") %>% select(all_of(feature_var)) %>% pull()
+  older_values <- spotify_clean %>% filter(period == "1980-1999") %>% select(all_of(feature_var)) %>% pull()
+  test_result <- t.test(modern_values, older_values)
+  tibble(
+    feature = feature_names[[feature_var]],
+    mean_1980_1999 = mean(older_values),
+    mean_2000_2020 = mean(modern_values),
+    difference = mean(modern_values) - mean(older_values),
+    p_value = test_result$p.value
+  )
+})
+
+trend_tests <- map_dfr(names(feature_names), function(feature_var) {
+  form <- as.formula(paste(feature_var, "~ release_year"))
+  model <- lm(form, data = spotify_clean)
+  coefs <- coef(summary(model))
+  tibble(
+    feature = feature_names[[feature_var]],
+    yearly_slope = coefs["release_year", "Estimate"],
+    p_value = coefs["release_year", "Pr(>|t|)"]
+  )
+})
+
+anova_tests <- map_dfr(names(feature_names), function(feature_var) {
+  form <- as.formula(paste(feature_var, "~ decade"))
+  model <- aov(form, data = spotify_clean)
+  aov_table <- summary(model)[[1]]
+  tibble(
+    feature = feature_names[[feature_var]],
+    F_value = aov_table[["F value"]][1],
+    p_value = aov_table[["Pr(>F)"]][1]
+  )
+})
+
+popularity_correlations <- map_dfr(names(feature_names), function(feature_var) {
+  test_result <- cor.test(spotify_clean[[feature_var]], spotify_clean$popularity)
+  tibble(
+    feature = feature_names[[feature_var]],
+    correlation = unname(test_result$estimate),
+    p_value = test_result$p.value
+  )
+})
+
+spotify_model <- spotify_clean %>%
+  mutate(
+    z_danceability = as.numeric(scale(danceability)),
+    z_energy = as.numeric(scale(energy)),
+    z_loudness = as.numeric(scale(loudness)),
+    z_release_year = as.numeric(scale(release_year))
+  )
+
+pop_model <- lm(
+  popularity ~ z_danceability + z_energy + z_loudness + z_release_year,
+  data = spotify_model
+)
+
+pop_model_table <- as.data.frame(coef(summary(pop_model))) %>%
+  rownames_to_column("term") %>%
+  as_tibble() %>%
+  filter(term != "(Intercept)") %>%
+  transmute(
+    predictor = recode(
+      term,
+      z_danceability = "Danceability",
+      z_energy = "Energy",
+      z_loudness = "Loudness",
+      z_release_year = "Release year"
+    ),
+    estimate = Estimate,
+    std_error = `Std. Error`,
+    t_value = `t value`,
+    p_value = `Pr(>|t|)`
+  )
+
+popularity_quintiles <- spotify_clean %>%
+  select(popularity, danceability, energy, loudness) %>%
+  pivot_longer(
+    cols = c(danceability, energy, loudness),
+    names_to = "feature",
+    values_to = "value"
+  ) %>%
+  group_by(feature) %>%
+  mutate(
+    quintile = ntile(value, 5),
+    quintile = factor(quintile, levels = 1:5, labels = c("Very low", "Low", "Middle", "High", "Very high"))
+  ) %>%
+  ungroup() %>%
+  mutate(
+    feature = recode(feature, !!!feature_names),
+    feature = factor(feature, levels = c("Danceability", "Energy", "Loudness"))
+  ) %>%
+  group_by(feature, quintile) %>%
+  summarise(
+    mean_popularity = mean(popularity),
+    se = sd(popularity) / sqrt(n()),
+    lower = mean_popularity - 1.96 * se,
+    upper = mean_popularity + 1.96 * se,
+    tracks = n(),
+    .groups = "drop"
+  )
+
+
+# Raw feature ranges behind the quintile labels in Fig. 5.
+# The table is placed immediately after Fig. 5 so the category labels are not ambiguous.
+range_text <- function(x) {
+  paste0(fmt_num(min(x), 3), " to ", fmt_num(max(x), 3))
+}
+
+quintile_ranges_wide <- spotify_clean %>%
+  select(danceability, energy, loudness) %>%
+  pivot_longer(
+    cols = c(danceability, energy, loudness),
+    names_to = "feature",
+    values_to = "value"
+  ) %>%
+  group_by(feature) %>%
+  mutate(
+    quintile = ntile(value, 5),
+    quintile = factor(quintile, levels = 1:5, labels = c("Very low", "Low", "Middle", "High", "Very high"))
+  ) %>%
+  ungroup() %>%
+  mutate(
+    feature = recode(feature, !!!feature_names),
+    feature = factor(feature, levels = c("Danceability", "Energy", "Loudness"))
+  ) %>%
+  group_by(feature, quintile) %>%
+  summarise(Range = range_text(value), .groups = "drop") %>%
+  pivot_wider(names_from = quintile, values_from = Range)
+
+energy_period_sentence <- feature_sentence(period_tests, "Energy")
+danceability_period_sentence <- feature_sentence(period_tests, "Danceability")
+loudness_period_sentence <- feature_sentence(period_tests, "Loudness")
+
+energy_trend <- trend_tests %>% filter(feature == "Energy")
+danceability_trend <- trend_tests %>% filter(feature == "Danceability")
+loudness_trend <- trend_tests %>% filter(feature == "Loudness")
+
+energy_pop <- pop_model_table %>% filter(predictor == "Energy")
+danceability_pop <- pop_model_table %>% filter(predictor == "Danceability")
+loudness_pop <- pop_model_table %>% filter(predictor == "Loudness")
+```
+
+
+\begin{abstract}
+This paper analyzes Spotify tracks released from 1980 to 2020 to examine whether modern songs have become more energetic, louder, and more danceable and whether these features are associated with track popularity. After filtering and cleaning the Spotify 1921-2020 dataset, the final sample contains `r comma(n_tracks)` tracks. The analysis combines line charts, decade comparisons, boxplots, Pearson correlations, Welch t-tests, analysis of variance, and multiple regression. The results strongly support the temporal hypothesis: energy, danceability, and loudness all increase over time, and the 2000-2020 period has significantly higher mean values than 1980-1999. The popularity hypothesis is only partially supported. Danceability and loudness show positive associations with popularity both visually and statistically, while energy has a weak positive simple correlation but a negative adjusted regression coefficient after controlling for release year. Therefore, the evidence suggests that Spotify audio features changed substantially over time, but popularity is only partly explained by these features and should not be interpreted causally.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Spotify, audio features, popularity, data visualization, music analytics, correlation, regression
+\end{IEEEkeywords}
+
+# I. INTRODUCTION
+
+Music production and listening behavior have changed substantially during the streaming era. Modern tracks are often described as more energetic, louder, and more rhythm-driven than songs released in earlier decades. Because streaming platforms store large-scale track metadata and audio features, these claims can be examined through data visualization and statistical analysis.
+
+This project asks the following research question: how have Spotify audio characteristics changed from 1980 to 2020, and are modern high-energy, loud, and danceable songs more popular than other songs? The goal is not to prove that audio features cause popularity. Instead, the goal is to describe long-term feature changes and test whether selected audio characteristics are associated with track popularity.
+
+The study has two hypotheses. H1 states that songs released in more recent years and decades have higher average energy, loudness, and danceability than songs released in earlier years and decades. H2 states that tracks with higher energy, loudness, and danceability tend to have higher track popularity.
+
+# II. DATASET DESCRIPTION AND PREPROCESSING
+
+The dataset is the Spotify Dataset 1921-2020, 600k+ Tracks from Kaggle [1]. This paper filters the data to tracks released from 1980 through 2020 to focus on the modern digital-music period and to avoid making the analysis too broad. The selected variables are release date, popularity, danceability, energy, loudness, acousticness, valence, and tempo. Popularity is a Spotify track-level score from 0 to 100, where 0 represents very low popularity and 100 represents very high popularity on the platform. Energy and danceability are measured on 0 to 1 scales, where larger values indicate more intense or more dance-suitable tracks. Loudness is measured in decibels (dB), where values are usually negative and less negative values indicate louder tracks; for example, -7 dB is louder than -11 dB.
+
+The cleaning workflow extracts release year from `release_date`, filters the sample to 1980-2020, removes rows with missing values in the selected variables, removes duplicate tracks using track ID when available, and assigns each track to a decade group and to a two-period comparison group: 1980-1999 or 2000-2020. Table I summarizes the final cleaned dataset.
+
+```{r table-summary, results='asis'}
+dataset_summary_table %>%
+  kable(
+    caption = "Summary statistics for the final cleaned dataset.",
+    booktabs = TRUE,
+    align = c("l", "r")
+  )
+```
+
+The dataset coverage plot in Fig. 1 shows that track counts vary by release year. Therefore, the analysis relies on averages, distributions, and formal tests rather than interpreting raw yearly track counts as evidence of global music production volume.
+
+```{r fig-track-counts, fig.cap='Number of tracks by release year in the cleaned 1980-2020 Spotify subset.', fig.width=6, fig.height=3.2}
+ggplot(track_counts_year, aes(x = release_year, y = tracks)) +
+  geom_line(color = "gray35", linewidth = 0.5) +
+  geom_point(color = "gray35", size = 0.8) +
+  scale_x_continuous(breaks = seq(1980, 2020, by = 5)) +
+  scale_y_continuous(
+    labels = comma,
+    breaks = scales::pretty_breaks(n = 6),
+    limits = c(4500, 15000)
+  ) +
+  labs(
+    title = "Dataset Coverage by Year",
+    subtitle = "Counts reflect tracks available in this Spotify dataset",
+    x = "Release year",
+    y = "Number of tracks"
+  ) +
+  theme_paper() +
+  theme(
+    plot.title = element_text(size = 12, face = "bold"),
+    plot.subtitle = element_text(size = 9),
+    axis.title = element_text(size = 9),
+    axis.text = element_text(size = 8)
+  )
+
+```
+
+# III. METHODOLOGY
+
+The analysis follows a visual-first structure. First, yearly dataset coverage is shown so that the reader can judge the stability of the sample. Next, annual mean trends and smoothed curves are used to examine long-term movement in danceability, energy, and loudness. Decade-level bar charts with confidence intervals summarize changes across periods, and boxplots compare the distributions of older and modern tracks. Finally, feature-popularity relationships are evaluated using quintile plots, Pearson correlations, and multiple regression.
+
+Five statistical procedures are used. Linear trend models estimate whether each audio feature changes with release year. One-way analysis of variance tests whether feature means differ across decade groups. Welch two-sample t-tests compare 1980-1999 with 2000-2020. Pearson correlations test simple linear associations between popularity and each feature. Finally, a multiple regression predicts popularity from standardized danceability, energy, loudness, and release year. Because the data are observational, the regression coefficients are interpreted as adjusted associations, not causal effects.
+
+# IV. RESULTS
+
+## A. Temporal Change in Audio Features
+
+```{r fig-year-trends, fig.cap='Average annual danceability, energy, and loudness with LOESS-smoothed long-term trend curves. Each panel uses its own vertical scale because danceability and energy are measured from 0 to 1, while loudness is measured in dB.', fig.width=7.1, fig.height=3.15, fig.env='figure*'}
+ggplot(year_feature_summary, aes(x = release_year, y = mean_value)) +
+  geom_line(color = "gray55", linewidth = 0.45) +
+  geom_point(color = "gray55", size = 0.7) +
+  geom_smooth(color = "black", method = "loess", span = 0.35, se = FALSE, linewidth = 0.75) +
+  facet_wrap(~ feature, scales = "free_y", nrow = 1) +
+  scale_x_continuous(breaks = seq(1980, 2020, by = 10)) +
+  labs(
+    title = "Average Audio Features Over Time",
+    subtitle = "Gray lines show annual means; black lines show smoothed long-term patterns",
+    x = "Release year",
+    y = "Average value"
+  ) +
+  theme_paper()
+```
+
+Fig. 2 shows that all three selected features increased during the study period. The gray lines and points are annual means calculated after grouping tracks by release year. The black long-term pattern is calculated with LOESS smoothing on those annual means using a span of 0.35 and without confidence bands. The loudness panel has a different vertical scale because loudness is measured in dB, while energy and danceability are 0-1 measures; therefore, the loudness panel should be interpreted using its own y-axis. The linear trend tests confirm the visual pattern: the yearly slope is `r fmt_num(energy_trend$yearly_slope, 5)` for energy, `r fmt_num(danceability_trend$yearly_slope, 5)` for danceability, and `r fmt_num(loudness_trend$yearly_slope, 5)` for loudness, with p-values below 0.001 for all three features. Since positive loudness slopes mean that values move closer to zero, this result indicates that tracks became louder over time.
+
+```{r fig-decade-comparison, fig.cap='Mean danceability, energy, and loudness by decade group with approximate 95 percent confidence intervals.', fig.width=7.1, fig.height=3.15, fig.env='figure*'}
+ggplot(decade_feature_summary, aes(x = decade, y = mean_value, group = feature)) +
+  geom_col(fill = "gray70", width = 0.65) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.15, linewidth = 0.4) +
+  facet_wrap(~ feature, scales = "free_y", nrow = 1) +
+  labs(
+    title = "Audio Feature Comparison by Decade",
+    subtitle = "The 2020 group contains only one release year",
+    x = "Decade group",
+    y = "Mean feature value"
+  ) +
+  theme_paper() +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1))
+```
+
+The decade-level comparison in Fig. 3 gives the same conclusion in a simpler form. Energy, danceability, and loudness differ significantly across decade groups according to ANOVA tests (p < 0.001 for all three). The 2020 group contains only one year, so it is shown for completeness but interpreted cautiously. Even with that caution, the broader pattern is clear: tracks from later decades have higher average energy and danceability and are much louder than tracks from the 1980s and 1990s.
+
+```{r fig-period-distributions, fig.cap='Distribution comparison between older tracks (1980-1999) and modern tracks (2000-2020).', fig.width=7.1, fig.height=3.15, fig.env='figure*'}
+ggplot(period_feature_long, aes(x = period, y = value, fill = period)) +
+  geom_boxplot(width = 0.55, outlier.alpha = 0.08, outlier.size = 0.25) +
+  facet_wrap(~ feature, scales = "free_y", nrow = 1) +
+  scale_fill_grey(start = 0.78, end = 0.78) +
+  labs(
+    title = "Older and Modern Tracks Have Different Feature Distributions",
+    subtitle = "Modern period is defined as 2000-2020",
+    x = "Release period",
+    y = "Feature value",
+    fill = "Period"
+  ) +
+  theme_paper() +
+  theme(legend.position = "none")
+```
+
+The period comparison in Fig. 4 and Table II provides the strongest test of H1. Compared with 1980-1999, the 2000-2020 period has `r fmt_num(period_tests %>% filter(feature == 'Energy') %>% pull(difference), 3)` higher mean energy, `r fmt_num(period_tests %>% filter(feature == 'Danceability') %>% pull(difference), 3)` higher mean danceability, and `r fmt_num(period_tests %>% filter(feature == 'Loudness') %>% pull(difference), 3)` dB higher mean loudness. All three Welch t-tests have p-values below 0.001. Therefore, the null hypothesis of no period difference is rejected for all three audio features, and H1 is supported.
+
+```{r table-period-tests, results='asis'}
+period_tests %>%
+  mutate(
+    across(c(mean_1980_1999, mean_2000_2020, difference), ~ round(.x, 3)),
+    p_value = ifelse(p_value < 0.001, "<0.001", as.character(round(p_value, 3)))
+  ) %>%
+  kable(caption = "Welch t-tests comparing 1980-1999 and 2000-2020.", booktabs = TRUE)
+```
+
+## B. Popularity Association
+
+```{r fig-popularity-quintiles, fig.cap='Average track popularity by audio-feature quintile with approximate 95 percent confidence intervals.', fig.width=7.1, fig.height=3.15, fig.env='figure*'}
+ggplot(popularity_quintiles, aes(x = quintile, y = mean_popularity, group = 1)) +
+  geom_line(color = "gray25", linewidth = 0.6) +
+  geom_point(color = "gray25", size = 1.2) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.12, linewidth = 0.35, color = "gray25") +
+  facet_wrap(~ feature, nrow = 1) +
+  labs(
+    title = "Popularity by Audio Feature Level",
+    subtitle = "Feature values are split into five equal-sized groups",
+    x = "Feature quintile",
+    y = "Average track popularity"
+  ) +
+  theme_paper() +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1))
+```
+
+Fig. 5 examines whether popularity rises at higher feature levels. Danceability and loudness show clear increasing patterns across quintiles. Energy also increases from very low to high values, but the highest-energy quintile does not continue the increase, suggesting a weaker and less stable relationship. The quintile labels represent equal-sized groups for each feature separately: Very low is the bottom 20%, Low is 20-40%, Middle is 40-60%, High is 60-80%, and Very high is the top 20%. Because each feature has its own scale, the same label does not represent the same raw value across danceability, energy, and loudness. Table III reports the actual value ranges used for those categories. Since popularity is measured from 0 to 100, a difference of about 10 popularity points is treated as practically meaningful, while smaller differences should be interpreted more cautiously even when statistically significant.
+
+```{r table-quintile-ranges, results='asis'}
+quintile_ranges_wide %>%
+  kable(
+    caption = "Audio-feature value ranges used for the quintile labels in Fig. 5.",
+    booktabs = TRUE,
+    align = c("l", "r", "r", "r", "r", "r")
+  )
+```
+
+The Pearson correlations in Table IV reject the null hypothesis of zero simple correlation for all three features because all p-values are below 0.001. However, the sizes of the correlations are small: `r fmt_num(popularity_correlations %>% filter(feature == 'Danceability') %>% pull(correlation), 3)` for danceability, `r fmt_num(popularity_correlations %>% filter(feature == 'Energy') %>% pull(correlation), 3)` for energy, and `r fmt_num(popularity_correlations %>% filter(feature == 'Loudness') %>% pull(correlation), 3)` for loudness. Thus, the simple association is statistically significant but practically weak, especially for energy.
+
+```{r table-correlations, results='asis'}
+popularity_correlations %>%
+  mutate(
+    correlation = round(correlation, 3),
+    p_value = ifelse(p_value < 0.001, "<0.001", as.character(round(p_value, 3)))
+  ) %>%
+  kable(caption = "Pearson correlations with track popularity.", booktabs = TRUE)
+```
+
+The multiple regression in Table V provides a stricter test because it adjusts for release year. Danceability remains positively associated with popularity: a one-standard-deviation increase is associated with a `r fmt_num(danceability_pop$estimate, 3)`-point increase in popularity (p < 0.001). Loudness also remains positively associated: a one-standard-deviation increase is associated with a `r fmt_num(loudness_pop$estimate, 3)`-point increase in popularity (p < 0.001). Energy, however, becomes negative after adjustment: a one-standard-deviation increase is associated with a `r fmt_num(abs(energy_pop$estimate), 3)`-point decrease in popularity (p < 0.001). Release year has the largest positive coefficient, which is consistent with Spotify popularity being influenced by recency and current streaming behavior.
+
+```{r table-regression, results='asis'}
+pop_model_table %>%
+  mutate(
+    across(c(estimate, std_error, t_value), ~ round(.x, 3)),
+    p_value = ifelse(p_value < 0.001, "<0.001", as.character(round(p_value, 3)))
+  ) %>%
+  kable(caption = "Multiple regression predicting track popularity.", booktabs = TRUE)
+```
+
+# V. DISCUSSION
+
+The evidence for temporal change is strong and consistent across every method used. The yearly trend plots, decade means, distributional boxplots, ANOVA tests, and Welch t-tests all point in the same direction. Therefore, the study rejects the null hypothesis that modern and older tracks have the same average energy, danceability, and loudness. Modern Spotify tracks in this sample are more energetic, more danceable, and louder than tracks from 1980-1999.
+
+The popularity hypothesis is more limited. If H2 is tested only with simple correlations and feature-quintile plots, the evidence is positive for all three selected features. However, the regression model shows that after controlling for release year, energy is not positively associated with popularity. This means the broad statement that higher energy, loudness, and danceability all predict higher popularity should not be fully accepted. A more accurate conclusion is that H2 is partially supported: danceability and loudness support the hypothesis, while energy does not support the positive adjusted-association part of the hypothesis.
+
+This difference between temporal results and popularity results is important. Audio features describe how music sounds, but popularity is also shaped by artist reputation, marketing, playlist placement, social media exposure, release timing, listener demographics, and platform-specific recommendation systems. Since these factors are not included in the dataset, the analysis should be treated as descriptive and associational rather than causal.
+
+# VI. LIMITATIONS
+
+This study has several limitations. First, Spotify popularity is a platform-based metric and may favor newer or currently streamed tracks. Second, the dataset includes tracks available in Spotify data rather than every song released globally, so yearly track counts reflect dataset coverage. Third, the 2020 decade group contains only one year. Fourth, the regression model is observational and cannot prove that any feature causes popularity.
+
+# VII. CONCLUSION
+
+This paper examined Spotify tracks from 1980 to 2020 to test whether modern music became more energetic, louder, and more danceable and whether these features are associated with popularity. The cleaned dataset contains `r comma(n_tracks)` tracks, giving enough evidence for stable visual and statistical comparisons.
+
+For H1, the conclusion is clear. Energy, danceability, and loudness all increased over time, all differed significantly across decades, and all were significantly higher in 2000-2020 than in 1980-1999. Therefore, the null hypothesis of no temporal difference is rejected, and H1 is supported.
+
+For H2, the conclusion is mixed. The null hypothesis of no simple association with popularity is rejected for danceability, energy, and loudness because all Pearson correlations are positive and statistically significant. However, after controlling for release year in the regression model, only danceability and loudness remain positive, while energy becomes negative. Therefore, H2 is only partially supported. The final conclusion is that Spotify audio features changed strongly across 1980-2020, but track popularity cannot be explained by energy, loudness, and danceability alone.
+
+# REFERENCES
+
+[1] Y. E. Ay, "Spotify Dataset 1921-2020, 600k+ Tracks," Kaggle, 2021. [Online]. Available: https://www.kaggle.com/datasets/yamaerenay/spotify-dataset-19212020-600k-tracks
+
+[2] Spotify for Developers, "Web API reference: Get Track's Audio Features." [Online]. Available: https://developer.spotify.com/documentation/web-api/reference/get-audio-features
+
+[3] V. Ochi, R. Estrada, T. Gaji, W. Gadea, and E. Duong, "Spotify danceability and popularity analysis using SAP," arXiv:2108.02370, 2021.
+
+[4] E. R. Tufte, *The Visual Display of Quantitative Information*, 2nd ed. Cheshire, CT, USA: Graphics Press, 2001.
