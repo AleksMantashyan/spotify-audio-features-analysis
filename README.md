@@ -41,16 +41,9 @@ The final cleaned dataset contained 397,220 tracks from 1980 to 2020. The projec
 ```text
 spotify-audio-features-analysis/
 ├── README.md
-├── report/
-│   └── DS116_Final_Project_IEEE.pdf
-└── code/
-    └── DS116_Group1_Final_Project_Code.Rmd
+├── DS116_Final_Project_IEEE.pdf
+└── DS116_Group1_Final_Project_Code.Rmd
 ```
-
-## Files
-
-- `report/` contains the final IEEE-style project report.
-- `code/` contains the R Markdown analysis file used for the project.
 
 ## Data Source
 
